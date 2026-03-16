@@ -1,39 +1,63 @@
-name: CI/CD Pipeline
+name: Deploy To VPS
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
 
 jobs:
-  test:
+  validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-      - name: Install server deps
-        run: cd server && npm ci
-      - name: Build server
-        run: cd server && npm run build
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
 
-  docker-build:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build Docker images
-        run: docker-compose build
+      - name: Install and build server
+        working-directory: server
+        run: |
+          npm ci
+          npm run build
 
-  deploy-fly:
-    needs: docker-build
-    runs-on: ubuntu-latest
+      - name: Install and build client
+        working-directory: client
+        run: |
+          npm ci
+          npm run build
+
+  deploy:
+    needs: validate
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Deploy to Fly.io
-        run: echo "Configure flyctl deploy here"
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Deploy on VPS over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            cd /opt/PokerHub
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+            docker compose up -d --build
+            sleep 10
+            curl -fsS http://127.0.0.1:3001/health
+            docker compose ps
