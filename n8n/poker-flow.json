@@ -1,0 +1,97 @@
+{
+  "name": "PokerHub Hand Analysis Flow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "poker-hand",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - New Hand",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://server:3001/hand/simulate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "playerCards", "value": "={{ $json.playerCards }}" },
+            { "name": "communityCards", "value": "={{ $json.communityCards }}" },
+            { "name": "numOpponents", "value": "={{ $json.numOpponents || 2 }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "simulate",
+      "name": "Monte Carlo Simulation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://server:3001/bet/recommend",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "winProbability", "value": "={{ $json.result.winProbability }}" },
+            { "name": "equity", "value": "={{ $json.result.equity }}" },
+            { "name": "potSize", "value": "={{ $('Webhook - New Hand').item.json.potSize || 200 }}" },
+            { "name": "callAmount", "value": "={{ $('Webhook - New Hand').item.json.callAmount || 0 }}" },
+            { "name": "playerStack", "value": "={{ $('Webhook - New Hand').item.json.playerStack || 5000 }}" },
+            { "name": "phase", "value": "={{ $('Webhook - New Hand').item.json.phase || 'preflop' }}" },
+            { "name": "numOpponents", "value": "={{ $('Webhook - New Hand').item.json.numOpponents || 2 }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "recommend",
+      "name": "Bet Recommendation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "hands",
+        "columns": "player_cards, community_cards, phase, pot_size, win_probability",
+        "additionalFields": {}
+      },
+      "id": "store-hand",
+      "name": "Store Hand in DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [960, 300],
+      "credentials": {
+        "postgres": { "id": "postgres-pokerhub", "name": "PokerHub Postgres" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { simulation: $('Monte Carlo Simulation').item.json.result, recommendation: $('Bet Recommendation').item.json.recommendation, handId: $('Store Hand in DB').item.json.id } }}"
+      },
+      "id": "respond",
+      "name": "Send Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - New Hand": { "main": [[{ "node": "Monte Carlo Simulation", "type": "main", "index": 0 }]] },
+    "Monte Carlo Simulation": { "main": [[{ "node": "Bet Recommendation", "type": "main", "index": 0 }]] },
+    "Bet Recommendation": { "main": [[{ "node": "Store Hand in DB", "type": "main", "index": 0 }]] },
+    "Store Hand in DB": { "main": [[{ "node": "Send Response", "type": "main", "index": 0 }]] }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1" },
+  "id": "pokerhub-flow-001"
+}

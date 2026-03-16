@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: pokerhub_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pokerhub}
+      POSTGRES_USER: ${POSTGRES_USER:-pokerhub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pokerhub_secret}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - pokerhub_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pokerhub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: ./server
+      dockerfile: ../docker/server.Dockerfile
+    container_name: pokerhub_server
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-pokerhub}
+      POSTGRES_USER: ${POSTGRES_USER:-pokerhub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pokerhub_secret}
+      JWT_SECRET: ${JWT_SECRET:-secret}
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - pokerhub_net
+
+  client:
+    build:
+      context: ./client
+      dockerfile: ../docker/client.Dockerfile
+    container_name: pokerhub_client
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_SOCKET_URL: http://localhost:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - server
+    networks:
+      - pokerhub_net
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: pokerhub_n8n
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:-admin_secret}
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-pokerhub}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-pokerhub_secret}
+    ports:
+      - "5678:5678"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n:/home/node/.n8n/workflows
+    networks:
+      - pokerhub_net
+
+networks:
+  pokerhub_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  n8n_data:
